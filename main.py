@@ -197,7 +197,16 @@ def chart_colors(labels: list[str]) -> list[str]:
     return colors
 
 
-def plot_author_pie(author_counts: list[tuple[str, int]], output: Path) -> None:
+def plot_title(item_type: str | None) -> str:
+    title = "AviUtl2 Catalog Authors"
+    normalized_item_type = normalize_item_type(item_type)
+    if normalized_item_type is not None:
+        title += f" (type: {normalized_item_type})"
+
+    return title
+
+
+def plot_author_pie(author_counts: list[tuple[str, int]], output: Path, title: str) -> None:
     labels = [author for author, _ in author_counts]
     values = [count for _, count in author_counts]
     colors = chart_colors(labels)
@@ -224,7 +233,7 @@ def plot_author_pie(author_counts: list[tuple[str, int]], output: Path) -> None:
         autotext.set_fontsize(9)
         autotext.set_weight("bold")
 
-    axis.set_title("AviUtl2 Catalog Authors", fontsize=16, pad=18)
+    axis.set_title(title, fontsize=16, pad=18)
     axis.axis("equal")
     axis.legend(
         wedges,
@@ -245,7 +254,7 @@ def main() -> int:
         data = fetch_json(args.url)
         author_counts = count_authors(data, args.item_type)
         plotted_counts = top_author_counts(author_counts, args.top)
-        plot_author_pie(plotted_counts, args.output)
+        plot_author_pie(plotted_counts, args.output, plot_title(args.item_type))
     except Exception as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
