@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import math
 import sys
@@ -24,6 +25,9 @@ DEFAULT_TOP = 10
 UNKNOWN_AUTHOR = "Unknown"
 OTHERS_AUTHOR = "Others"
 OTHERS_COLOR = "#9ca3af"
+TYPE_ALIASES = {
+    "プラグイン": ("MOD", "*プラグイン"),
+}
 FONT_CANDIDATES = [
     "Droid Sans Fallback",
     "Noto Sans CJK JP",
@@ -37,6 +41,7 @@ class CatalogItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     author: Annotated[str | None, Field(default=None)]
+    item_type: Annotated[str | None, Field(default=None, validation_alias="type")]
 
 
 CatalogItems = TypeAdapter(list[CatalogItem])
@@ -62,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_TOP,
         help=f"Number of top authors to show before grouping the rest. Default: {DEFAULT_TOP}",
+    )
+    parser.add_argument(
+        "--type",
+        dest="item_type",
+        help='Catalog item type to include. "プラグイン" includes MOD and *プラグイン.',
     )
     return parser.parse_args()
 
@@ -91,9 +101,42 @@ def normalize_author(author: str | None) -> str:
     return normalized
 
 
-def count_authors(data: Any) -> Counter[str]:
+def normalize_item_type(item_type: str | None) -> str | None:
+    if item_type is None:
+        return None
+
+    normalized = item_type.strip()
+    if normalized == "":
+        return None
+
+    return normalized
+
+
+def item_type_patterns(item_type: str | None) -> tuple[str, ...] | None:
+    normalized = normalize_item_type(item_type)
+    if normalized is None:
+        return None
+
+    return TYPE_ALIASES.get(normalized, (normalized,))
+
+
+def matches_item_type(item: CatalogItem, patterns: tuple[str, ...] | None) -> bool:
+    if patterns is None:
+        return True
+
+    item_type = normalize_item_type(item.item_type)
+    if item_type is None:
+        return False
+
+    return any(fnmatch.fnmatchcase(item_type, pattern) for pattern in patterns)
+
+
+def count_authors(data: Any, item_type: str | None) -> Counter[str]:
     items = CatalogItems.validate_python(data)
-    return Counter(normalize_author(item.author) for item in items)
+    patterns = item_type_patterns(item_type)
+    return Counter(
+        normalize_author(item.author) for item in items if matches_item_type(item, patterns)
+    )
 
 
 def top_author_counts(author_counts: Counter[str], top: int) -> list[tuple[str, int]]:
@@ -200,7 +243,7 @@ def main() -> int:
 
     try:
         data = fetch_json(args.url)
-        author_counts = count_authors(data)
+        author_counts = count_authors(data, args.item_type)
         plotted_counts = top_author_counts(author_counts, args.top)
         plot_author_pie(plotted_counts, args.output)
     except Exception as error:
