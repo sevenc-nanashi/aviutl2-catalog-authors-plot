@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import colorsys
 import fnmatch
+import hashlib
 import json
 import math
 import sys
@@ -12,15 +14,17 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 import matplotlib
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib import colors as mcolors  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
 DEFAULT_URL = "https://github.com/Neosku/aviutl2-catalog-data/raw/main/index.json"
 DEFAULT_OUTPUT = Path("authors.png")
+DEFAULT_AUTHOR_COLOR_OVERRIDES = Path("author_color_overrides.json")
 DEFAULT_TOP = 10
 UNKNOWN_AUTHOR = "Unknown"
 OTHERS_AUTHOR = "Others"
@@ -165,6 +169,33 @@ def autopct_with_counts(values: list[int]) -> Any:
     return format_label
 
 
+def load_author_color_overrides(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    try:
+        with path.open(encoding="utf-8") as file:
+            raw_overrides = json.load(file)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Failed to parse {path}: {error}") from error
+
+    try:
+        validated = TypeAdapter(dict[str, str]).validate_python(raw_overrides)
+    except ValidationError as error:
+        raise RuntimeError(f"Invalid {path}: {error}") from error
+
+    overrides = {}
+    for author, color in validated.items():
+        normalized_author = normalize_author(author)
+        normalized_color = color.strip()
+        if not mcolors.is_color_like(normalized_color):
+            raise ValueError(f"Invalid color for {normalized_author}: {normalized_color}")
+
+        overrides[normalized_author] = normalized_color
+
+    return overrides
+
+
 def available_font_families() -> list[str]:
     families = []
     for font in FONT_CANDIDATES:
@@ -181,18 +212,28 @@ def available_font_families() -> list[str]:
     return families
 
 
-def chart_colors(labels: list[str]) -> list[str]:
-    default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+def author_color(author: str) -> str:
+    digest = hashlib.sha256(author.encode()).digest()
+    hue = int.from_bytes(digest[:2], byteorder="big") / 65535
+    saturation = 0.58 + (digest[2] / 255) * 0.18
+    lightness = 0.44 + (digest[3] / 255) * 0.12
+    red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return mcolors.to_hex((red, green, blue))
+
+
+def chart_colors(labels: list[str], color_overrides: dict[str, str]) -> list[str]:
     colors = []
-    default_index = 0
 
     for label in labels:
+        if label in color_overrides:
+            colors.append(color_overrides[label])
+            continue
+
         if label == OTHERS_AUTHOR:
             colors.append(OTHERS_COLOR)
             continue
 
-        colors.append(default_colors[default_index % len(default_colors)])
-        default_index += 1
+        colors.append(author_color(label))
 
     return colors
 
@@ -206,10 +247,15 @@ def plot_title(item_type: str | None) -> str:
     return title
 
 
-def plot_author_pie(author_counts: list[tuple[str, int]], output: Path, title: str) -> None:
+def plot_author_pie(
+    author_counts: list[tuple[str, int]],
+    output: Path,
+    title: str,
+    color_overrides: dict[str, str],
+) -> None:
     labels = [author for author, _ in author_counts]
     values = [count for _, count in author_counts]
-    colors = chart_colors(labels)
+    colors = chart_colors(labels, color_overrides)
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -251,10 +297,11 @@ def main() -> int:
     args = parse_args()
 
     try:
+        color_overrides = load_author_color_overrides(DEFAULT_AUTHOR_COLOR_OVERRIDES)
         data = fetch_json(args.url)
         author_counts = count_authors(data, args.item_type)
         plotted_counts = top_author_counts(author_counts, args.top)
-        plot_author_pie(plotted_counts, args.output, plot_title(args.item_type))
+        plot_author_pie(plotted_counts, args.output, plot_title(args.item_type), color_overrides)
     except Exception as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
