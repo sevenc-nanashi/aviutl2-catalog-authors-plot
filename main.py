@@ -75,7 +75,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--type",
         dest="item_type",
-        help='Catalog item type to include. "プラグイン" includes MOD and *プラグイン.',
+        help=(
+            "Comma-separated catalog item types to include. "
+            '"プラグイン" includes MOD and *プラグイン.'
+        ),
     )
     return parser.parse_args()
 
@@ -121,7 +124,19 @@ def item_type_patterns(item_type: str | None) -> tuple[str, ...] | None:
     if normalized is None:
         return None
 
-    return TYPE_ALIASES.get(normalized, (normalized,))
+    requested_types = tuple(
+        requested_type
+        for raw_type in normalized.split(",")
+        if (requested_type := normalize_item_type(raw_type)) is not None
+    )
+    if not requested_types:
+        return None
+
+    return tuple(
+        pattern
+        for requested_type in requested_types
+        for pattern in TYPE_ALIASES.get(requested_type, (requested_type,))
+    )
 
 
 def matches_item_type(item: CatalogItem, patterns: tuple[str, ...] | None) -> bool:
